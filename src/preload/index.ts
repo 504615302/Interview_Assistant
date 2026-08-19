@@ -18,6 +18,7 @@ const api = {
     mimeType: string
   }): Promise<string> => ipcRenderer.invoke('stt:transcribe', payload),
   ensureVoskModel: (): Promise<Uint8Array> => ipcRenderer.invoke('vosk:ensure'),
+  importVoskZip: (): Promise<Uint8Array> => ipcRenderer.invoke('vosk:import'),
   onVoskProgress: (
     handler: (progress: { phase: 'download' | 'extract'; received: number; total: number }) => void
   ): (() => void) => {

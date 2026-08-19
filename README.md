@@ -42,6 +42,7 @@ npm run dist
 MiniMax 没有公开的语音识别接口，所以转写不走 MiniMax。
 
 - 默认使用本地中文模型（Vosk，约 40MB，首次启动自动下载，之后离线可用）
+- 若自动下载失败（国内常见），从 [Vosk 模型页](https://alphacephei.com/vosk/models) 下载 `vosk-model-small-cn-0.22.zip`，再在应用里点「选择本地 zip」
 - 麦克风和系统声音都会把录到的音频送给这个本地模型
 - 浏览器自带语音识别在 Electron / 国内网络下经常不可用，因此不再作为默认方案
 - 也可以在设置里填写兼容 Whisper 的转写地址作为备选

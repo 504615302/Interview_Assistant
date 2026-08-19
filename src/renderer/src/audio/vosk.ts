@@ -34,43 +34,130 @@ type VoskModel = {
 let modelPromise: Promise<VoskModel> | null = null
 let blobUrl: string | null = null
 
-async function loadModel(archive: ArrayBuffer | Uint8Array): Promise<VoskModel> {
-  const vosk = (await import('vosk-browser')) as {
-    Model: new (modelUrl: string) => VoskModel
+type VoskModule = {
+  Model?: unknown
+  createModel?: unknown
+  default?: VoskModule
+}
+
+function asModelCtor(value: unknown): (new (modelUrl: string) => VoskModel) | undefined {
+  if (typeof value === 'function') return value as new (modelUrl: string) => VoskModel
+  if (value && typeof value === 'object') {
+    const nested = (value as { default?: unknown }).default
+    if (typeof nested === 'function') return nested as new (modelUrl: string) => VoskModel
   }
+  return undefined
+}
+
+function asCreateModel(value: unknown): ((modelUrl: string) => Promise<VoskModel>) | undefined {
+  return typeof value === 'function' ? (value as (modelUrl: string) => Promise<VoskModel>) : undefined
+}
+
+function readVoskFrom(value: unknown): VoskModule | null {
+  if (!value || typeof value !== 'object') return null
+  return value as VoskModule
+}
+
+async function loadVoskScript(): Promise<VoskModule> {
+  const globalVosk = (globalThis as { Vosk?: VoskModule }).Vosk
+  if (globalVosk && (globalVosk.Model || globalVosk.createModel)) {
+    return globalVosk
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>('script[data-vosk-loader="true"]')
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true })
+      existing.addEventListener('error', () => reject(new Error('无法加载 vosk.js')), { once: true })
+      return
+    }
+    const script = document.createElement('script')
+    script.src = `${import.meta.env.BASE_URL}vosk.js`
+    script.async = true
+    script.dataset.voskLoader = 'true'
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error('无法加载 vosk.js，请重启应用'))
+    document.head.appendChild(script)
+  })
+
+  const vosk = (globalThis as { Vosk?: VoskModule }).Vosk
+  if (!vosk) {
+    throw new Error('vosk.js 已执行，但没有挂上全局 Vosk')
+  }
+  return vosk
+}
+
+function resolveVoskApi(imported: VoskModule): {
+  Model?: new (modelUrl: string) => VoskModel
+  createModel?: (modelUrl: string) => Promise<VoskModel>
+} {
+  const layers: Array<VoskModule | null> = [
+    imported,
+    imported.default ?? null,
+    imported.default?.default ?? null,
+    readVoskFrom((globalThis as { Vosk?: unknown }).Vosk)
+  ]
+
+  for (const layer of layers) {
+    if (!layer) continue
+    const Model = asModelCtor(layer.Model)
+    const createModel = asCreateModel(layer.createModel)
+    if (Model || createModel) return { Model, createModel }
+  }
+
+  throw new Error('vosk-browser 未能正确加载，请重启应用')
+}
+
+async function loadModel(archive: ArrayBuffer | Uint8Array): Promise<VoskModel> {
+  const imported = await loadVoskScript()
+  const vosk = resolveVoskApi(imported)
 
   if (blobUrl) URL.revokeObjectURL(blobUrl)
   const bytes = archive instanceof Uint8Array ? archive : new Uint8Array(archive)
   blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/gzip' }))
   const modelUrl = blobUrl
 
-  return new Promise((resolve, reject) => {
-    let settled = false
-    const finish = (error?: Error, model?: VoskModel): void => {
-      if (settled) return
-      settled = true
-      window.clearTimeout(timer)
-      if (error) reject(error)
-      else if (model) resolve(model)
-    }
+  if (typeof vosk.Model === 'function') {
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const finish = (error?: Error, model?: VoskModel): void => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        if (error) reject(error)
+        else if (model) resolve(model)
+      }
 
-    const timer = window.setTimeout(() => {
-      finish(new Error('语音模型加载超时，请重启应用'))
-    }, 120000)
+      const timer = window.setTimeout(() => {
+        finish(new Error('语音模型加载超时，请重启应用'))
+      }, 120000)
 
-    try {
-      const model = new vosk.Model(modelUrl)
-      model.on('load', (message) => {
-        if (message.result) finish(undefined, model)
-        else finish(new Error('Vosk 无法解析模型文件'))
-      })
-      model.on('error', (message) => {
-        finish(new Error(message.error || 'Vosk worker 报错'))
-      })
-    } catch (error) {
-      finish(error instanceof Error ? error : new Error(String(error)))
-    }
-  })
+      try {
+        const model = new vosk.Model(modelUrl)
+        model.on('load', (message) => {
+          if (message.result) finish(undefined, model)
+          else finish(new Error('Vosk 无法解析模型文件'))
+        })
+        model.on('error', (message) => {
+          finish(new Error(message.error || 'Vosk worker 报错'))
+        })
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
+  }
+
+  if (typeof vosk.createModel !== 'function') {
+    throw new Error('vosk-browser 没有可用的 Model / createModel')
+  }
+
+  const loaded = await Promise.race([
+    vosk.createModel(modelUrl),
+    new Promise<never>((_, reject) => {
+      window.setTimeout(() => reject(new Error('语音模型加载超时，请重启应用')), 120000)
+    })
+  ])
+  return loaded
 }
 
 export class LocalStt {
@@ -81,7 +168,12 @@ export class LocalStt {
 
   async prepare(archive: ArrayBuffer | Uint8Array): Promise<void> {
     if (!modelPromise) modelPromise = loadModel(archive)
-    this.model = await modelPromise
+    try {
+      this.model = await modelPromise
+    } catch (error) {
+      modelPromise = null
+      throw error
+    }
   }
 
   start(onUpdate: (text: string) => void): void {

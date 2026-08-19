@@ -215,6 +215,16 @@ pre {
   font-size: 13px;
 }
 
+.stt-actions {
+  display: flex;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.stt-actions button {
+  flex: 1;
+}
+
 .footer {
   display: flex;
   gap: 8px;

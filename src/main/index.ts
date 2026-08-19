@@ -5,6 +5,7 @@ import {
   app,
   BrowserWindow,
   desktopCapturer,
+  dialog,
   globalShortcut,
   ipcMain,
   session,
@@ -12,7 +13,7 @@ import {
 } from 'electron'
 import { loadSettings, saveSettings } from './settings'
 import { streamAnswer, transcribeAudio } from './minimax'
-import { ensureVoskModel } from './vosk-model'
+import { ensureVoskModel, formatNetworkError, importVoskZip } from './vosk-model'
 import type { AppSettings } from '../shared/types'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -104,11 +105,41 @@ function setupIpc(): void {
   ipcMain.handle('window:close', () => mainWindow?.close())
 
   ipcMain.handle('vosk:ensure', async (event) => {
-    return ensureVoskModel((progress) => {
-      if (!event.sender.isDestroyed()) {
-        event.sender.send('vosk:progress', progress)
-      }
-    })
+    try {
+      return await ensureVoskModel((progress) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('vosk:progress', progress)
+        }
+      })
+    } catch (error) {
+      throw new Error(formatNetworkError(error))
+    }
+  })
+
+  ipcMain.handle('vosk:import', async (event) => {
+    const picked = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, {
+          title: '选择 vosk-model-small-cn-0.22.zip',
+          filters: [{ name: 'Vosk 模型 zip', extensions: ['zip'] }],
+          properties: ['openFile']
+        })
+      : await dialog.showOpenDialog({
+          title: '选择 vosk-model-small-cn-0.22.zip',
+          filters: [{ name: 'Vosk 模型 zip', extensions: ['zip'] }],
+          properties: ['openFile']
+        })
+    if (picked.canceled || !picked.filePaths[0]) {
+      throw new Error('未选择文件')
+    }
+    try {
+      return await importVoskZip(picked.filePaths[0], (progress) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('vosk:progress', progress)
+        }
+      })
+    } catch (error) {
+      throw new Error(formatNetworkError(error))
+    }
   })
 
   ipcMain.handle(

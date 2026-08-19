@@ -20,6 +20,11 @@ function statusLabel(status: Status, recording: boolean): string {
   return '就绪'
 }
 
+function ipcErrorMessage(err: unknown, fallback: string): string {
+  if (!(err instanceof Error)) return fallback
+  return err.message.replace(/^Error invoking remote method '[^']+':\s*/, '')
+}
+
 function formatDuration(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000))
   const minutes = String(Math.floor(total / 60)).padStart(2, '0')
@@ -81,11 +86,52 @@ export default function App() {
       })
       .catch((err) => {
         setSttReady(false)
-        setSttHint(err instanceof Error ? `语音模型加载失败：${err.message}` : '语音模型准备失败')
+        setSttHint(
+          err instanceof Error
+            ? `语音模型加载失败：${ipcErrorMessage(err, err.message)}`
+            : '语音模型准备失败'
+        )
       })
 
     return stopProgress
   }, [])
+
+  async function applyVoskArchive(archive: Uint8Array): Promise<void> {
+    setSttHint('正在加载语音模型…')
+    await localSttRef.current.prepare(archive)
+    setSttReady(true)
+    setSttHint('')
+  }
+
+  async function retryVoskDownload(): Promise<void> {
+    setSttReady(false)
+    setSttHint('正在重新下载语音模型…')
+    try {
+      await applyVoskArchive(await window.api.ensureVoskModel())
+    } catch (err) {
+      setSttReady(false)
+      setSttHint(
+        err instanceof Error
+          ? `语音模型加载失败：${ipcErrorMessage(err, err.message)}`
+          : '语音模型准备失败'
+      )
+    }
+  }
+
+  async function importLocalVoskZip(): Promise<void> {
+    setSttHint('正在安装本地模型…')
+    try {
+      await applyVoskArchive(await window.api.importVoskZip())
+    } catch (err) {
+      const message = ipcErrorMessage(err, err instanceof Error ? err.message : '导入失败')
+      if (message.includes('未选择文件')) {
+        setSttHint(sttReady ? '' : sttHint)
+        return
+      }
+      setSttReady(false)
+      setSttHint(`语音模型加载失败：${message}`)
+    }
+  }
 
   useEffect(() => {
     return window.api.onAnswerChunk((text) => setAnswer(text))
@@ -314,6 +360,16 @@ export default function App() {
       </section>
 
       {error ? <div className="error">{error}</div> : null}
+      {!sttReady && (sttHint.includes('失败') || sttHint.includes('无法')) ? (
+        <div className="stt-actions">
+          <button type="button" className="ghost" onClick={() => void retryVoskDownload()}>
+            重试下载
+          </button>
+          <button type="button" className="ghost" onClick={() => void importLocalVoskZip()}>
+            选择本地 zip
+          </button>
+        </div>
+      ) : null}
 
       <footer className="footer">
         <button
@@ -436,8 +492,12 @@ export default function App() {
           </label>
           {hotkeyHint ? <p className="hint warn">{hotkeyHint}</p> : null}
           <p className="hint">
-            答题使用 MiniMax。语音转写默认用本地中文模型；MiniMax 没有官方语音识别接口。
+            答题使用 MiniMax。语音转写默认用本地中文模型。国内网络下若自动下载失败，可先从
+            alphacephei.com/vosk/models 下载 vosk-model-small-cn-0.22.zip，再点「选择本地 zip」。
           </p>
+          <button type="button" className="ghost" onClick={() => void importLocalVoskZip()}>
+            选择本地 zip
+          </button>
           <button type="button" className="primary" onClick={() => void saveCurrentSettings()}>
             保存
           </button>
