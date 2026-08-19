@@ -13,6 +13,11 @@
   },
   "author": "",
   "license": "MIT",
+  "dependencies": {
+    "extract-zip": "^2.0.1",
+    "tar": "^7.4.3",
+    "vosk-browser": "^0.0.8"
+  },
   "devDependencies": {
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",

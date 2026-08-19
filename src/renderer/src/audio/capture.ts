@@ -74,12 +74,15 @@ export class AudioRecorder {
   private analyser: AnalyserNode | null = null
   private chunks: Float32Array[] = []
   private raf = 0
+  private onAudio: ((buffer: AudioBuffer) => void) | null = null
 
   async start(
     source: 'microphone' | 'system',
-    onLevel: (level: number) => void
+    onLevel: (level: number) => void,
+    onAudio?: (buffer: AudioBuffer) => void
   ): Promise<void> {
     this.chunks = []
+    this.onAudio = onAudio ?? null
     this.stream = await captureAudioStream(source)
     const context = new AudioContext({ sampleRate: 16000 })
     this.context = context
@@ -94,6 +97,7 @@ export class AudioRecorder {
     this.processor = processor
     processor.onaudioprocess = (event) => {
       this.chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)))
+      this.onAudio?.(event.inputBuffer)
     }
 
     const mute = context.createGain()
@@ -129,6 +133,7 @@ export class AudioRecorder {
     this.analyser = null
     this.context = null
     this.stream = null
+    this.onAudio = null
 
     const length = this.chunks.reduce((sum, chunk) => sum + chunk.length, 0)
     const samples = new Float32Array(length)

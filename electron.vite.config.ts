@@ -16,6 +16,9 @@ export default defineConfig({
         '@shared': resolve('src/shared')
       }
     },
-    plugins: [react()]
+    plugins: [react()],
+    optimizeDeps: {
+      exclude: ['vosk-browser']
+    }
   }
 })

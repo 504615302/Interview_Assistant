@@ -17,6 +17,17 @@ const api = {
     filename: string
     mimeType: string
   }): Promise<string> => ipcRenderer.invoke('stt:transcribe', payload),
+  ensureVoskModel: (): Promise<string> => ipcRenderer.invoke('vosk:ensure'),
+  onVoskProgress: (
+    handler: (progress: { phase: 'download' | 'extract'; received: number; total: number }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      progress: { phase: 'download' | 'extract'; received: number; total: number }
+    ): void => handler(progress)
+    ipcRenderer.on('vosk:progress', listener)
+    return () => ipcRenderer.removeListener('vosk:progress', listener)
+  },
   answer: (question: string): Promise<string> => ipcRenderer.invoke('ai:answer', question),
   cancelAnswer: (): Promise<void> => ipcRenderer.invoke('ai:cancel'),
   onHotkeyToggle: (handler: () => void): (() => void) => {

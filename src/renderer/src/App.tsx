@@ -8,6 +8,7 @@ import {
 } from '@shared/types'
 import { AudioRecorder, normalizeTranscript } from './audio/capture'
 import { LiveSpeech, isSpeechApiAvailable } from './audio/speech'
+import { LocalStt } from './audio/vosk'
 
 type Status = 'idle' | 'recording' | 'transcribing' | 'answering' | 'error'
 
@@ -38,9 +39,12 @@ export default function App() {
   const [elapsed, setElapsed] = useState(0)
   const [copied, setCopied] = useState(false)
   const [hotkeyHint, setHotkeyHint] = useState('')
+  const [sttReady, setSttReady] = useState(false)
+  const [sttHint, setSttHint] = useState('正在准备本地语音识别…')
 
   const recorderRef = useRef(new AudioRecorder())
   const speechRef = useRef(new LiveSpeech())
+  const localSttRef = useRef(new LocalStt())
   const recordingRef = useRef(false)
   const startedAtRef = useRef(0)
   const busyRef = useRef(false)
@@ -49,10 +53,38 @@ export default function App() {
 
   useEffect(() => {
     void window.api.getSettings().then((loaded) => {
-      setSettings(loaded)
-      setShowSettings(!loaded.apiKey.trim())
+      const next =
+        loaded.sttMode === 'auto' ? { ...loaded, sttMode: 'local' as const } : loaded
+      setSettings(next)
+      setShowSettings(!next.apiKey.trim())
       setReady(true)
     })
+  }, [])
+
+  useEffect(() => {
+    const stopProgress = window.api.onVoskProgress((progress) => {
+      if (progress.phase === 'download') {
+        const pct = progress.total ? Math.round((progress.received / progress.total) * 100) : 0
+        setSttHint(`正在下载中文语音模型 ${pct}%（约 40MB，只需一次）`)
+        return
+      }
+      setSttHint('正在安装语音模型…')
+    })
+
+    void window.api
+      .ensureVoskModel()
+      .then(async (modelUrl) => {
+        setSttHint('正在加载语音模型…')
+        await localSttRef.current.prepare(modelUrl)
+        setSttReady(true)
+        setSttHint('')
+      })
+      .catch((err) => {
+        setSttReady(false)
+        setSttHint(err instanceof Error ? err.message : '语音模型准备失败')
+      })
+
+    return stopProgress
   }, [])
 
   useEffect(() => {
@@ -69,6 +101,12 @@ export default function App() {
 
   const startListening = useCallback(async () => {
     if (busyRef.current) return
+    const useLocal = settings.sttMode !== 'whisper' && settings.sttMode !== 'speech-api'
+    if (useLocal && !sttReady) {
+      setError(sttHint || '语音模型还没准备好，请稍候')
+      setStatus('error')
+      return
+    }
     setError('')
     setCopied(false)
     setQuestion('')
@@ -79,20 +117,28 @@ export default function App() {
     startedAtRef.current = Date.now()
 
     try {
-      await recorderRef.current.start(settings.audioSource, setLevel)
+      if (useLocal) {
+        localSttRef.current.start((text) => setQuestion(text))
+      }
+      await recorderRef.current.start(
+        settings.audioSource,
+        setLevel,
+        useLocal ? (buffer) => localSttRef.current.accept(buffer) : undefined
+      )
       const canUseSpeech =
         settings.audioSource === 'microphone' &&
-        settings.sttMode !== 'whisper' &&
+        settings.sttMode === 'speech-api' &&
         isSpeechApiAvailable()
       if (canUseSpeech) {
         speechRef.current.start((text) => setQuestion(text))
       }
     } catch (err) {
       recordingRef.current = false
+      void localSttRef.current.stop()
       setStatus('error')
       setError(err instanceof Error ? err.message : '无法开始收声')
     }
-  }, [settings.audioSource, settings.sttMode])
+  }, [settings.audioSource, settings.sttMode, sttHint, sttReady])
 
   const stopAndAnswer = useCallback(async () => {
     if (busyRef.current) return
@@ -100,7 +146,10 @@ export default function App() {
     recordingRef.current = false
     setLevel(0)
 
-    const liveText = await speechRef.current.stop()
+    const liveText =
+      settings.sttMode === 'speech-api'
+        ? await speechRef.current.stop()
+        : await localSttRef.current.stop()
     let wav: ArrayBuffer
     let durationMs = 0
     try {
@@ -231,7 +280,7 @@ export default function App() {
           {statusLabel(status, recordingRef.current)}
         </span>
         <span className="timer">
-          {status === 'recording' ? formatDuration(elapsed) : hotkeyText}
+          {status === 'recording' ? formatDuration(elapsed) : sttHint || hotkeyText}
         </span>
       </div>
 
@@ -267,7 +316,12 @@ export default function App() {
       {error ? <div className="error">{error}</div> : null}
 
       <footer className="footer">
-        <button type="button" className="primary" onClick={() => void toggleListening()}>
+        <button
+          type="button"
+          className="primary"
+          disabled={!recordingRef.current && !sttReady && settings.sttMode !== 'whisper'}
+          onClick={() => void toggleListening()}
+        >
           {status === 'recording' ? '停止并作答' : '开始收声'}
         </button>
         <button type="button" className="ghost" onClick={() => setShowSettings(true)}>
@@ -347,9 +401,9 @@ export default function App() {
                 setSettings({ ...settings, sttMode: event.target.value as AppSettings['sttMode'] })
               }
             >
-              <option value="auto">自动（麦克风实时识别，失败再转写）</option>
-              <option value="speech-api">仅浏览器语音识别</option>
-              <option value="whisper">音频转写接口</option>
+              <option value="local">本地中文识别（推荐，首次下载约 40MB）</option>
+              <option value="speech-api">浏览器语音识别（国内常不可用）</option>
+              <option value="whisper">自定义 Whisper 转写接口</option>
             </select>
           </label>
           <label>
@@ -382,7 +436,7 @@ export default function App() {
           </label>
           {hotkeyHint ? <p className="hint warn">{hotkeyHint}</p> : null}
           <p className="hint">
-            答题使用 MiniMax。语音识别默认走麦克风实时转写；MiniMax 没有官方语音识别接口。
+            答题使用 MiniMax。语音转写默认用本地中文模型；MiniMax 没有官方语音识别接口。
           </p>
           <button type="button" className="primary" onClick={() => void saveCurrentSettings()}>
             保存

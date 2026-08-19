@@ -1,6 +1,6 @@
 export type AudioSource = 'microphone' | 'system'
 export type Region = 'china' | 'global'
-export type SttMode = 'auto' | 'speech-api' | 'whisper'
+export type SttMode = 'local' | 'auto' | 'speech-api' | 'whisper'
 
 export interface AppSettings {
   apiKey: string
@@ -34,7 +34,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   model: 'MiniMax-M2.7-highspeed',
   audioSource: 'microphone',
   hotkey: 'CommandOrControl+Shift+Space',
-  sttMode: 'auto',
+  sttMode: 'local',
   sttBaseUrl: '',
   sttModel: 'whisper-1'
 }
