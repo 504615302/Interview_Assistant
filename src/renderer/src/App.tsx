@@ -73,15 +73,15 @@ export default function App() {
 
     void window.api
       .ensureVoskModel()
-      .then(async (modelUrl) => {
+      .then(async (archive) => {
         setSttHint('正在加载语音模型…')
-        await localSttRef.current.prepare(modelUrl)
+        await localSttRef.current.prepare(archive)
         setSttReady(true)
         setSttHint('')
       })
       .catch((err) => {
         setSttReady(false)
-        setSttHint(err instanceof Error ? err.message : '语音模型准备失败')
+        setSttHint(err instanceof Error ? `语音模型加载失败：${err.message}` : '语音模型准备失败')
       })
 
     return stopProgress

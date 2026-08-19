@@ -1,4 +1,5 @@
-import { createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
@@ -6,9 +7,9 @@ import { app } from 'electron'
 import extract from 'extract-zip'
 import { create as tarCreate } from 'tar'
 
-export const VOSK_MODEL_URL = 'voskmodel://model.tar.gz'
 const MODEL_DIR_NAME = 'vosk-model-small-cn-0.22'
-const ZIP_NAME = `${MODEL_DIR_NAME}.zip`
+const ARCHIVE_NAME = 'vosk-cn-0.22-flat.tar.gz'
+const FORMAT_MARK = 'flat-v1'
 
 const DOWNLOAD_URLS = [
   'https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip',
@@ -27,25 +28,46 @@ function modelRoot(): string {
 }
 
 export function voskArchivePath(): string {
-  return join(modelRoot(), `${MODEL_DIR_NAME}.tar.gz`)
+  return join(modelRoot(), ARCHIVE_NAME)
 }
 
 function zipPath(): string {
-  return join(modelRoot(), ZIP_NAME)
+  return join(modelRoot(), `${MODEL_DIR_NAME}.zip`)
 }
 
 function extractDir(): string {
   return join(modelRoot(), 'extract')
 }
 
-export function isVoskModelReady(): boolean {
+function markPath(): string {
+  return join(modelRoot(), 'format.txt')
+}
+
+function isVoskModelReady(): boolean {
   const archive = voskArchivePath()
-  if (!existsSync(archive)) return false
+  const mark = markPath()
+  if (!existsSync(archive) || !existsSync(mark)) return false
   try {
     return statSync(archive).size > 1_000_000
   } catch {
     return false
   }
+}
+
+function findModelDir(root: string): string {
+  const names = readdirSync(root).filter((name) => name !== '__MACOSX')
+  if (names.includes('am') && names.includes('conf')) return root
+  for (const name of names) {
+    const full = join(root, name)
+    if (statSync(full).isDirectory()) {
+      try {
+        return findModelDir(full)
+      } catch {
+        // keep searching
+      }
+    }
+  }
+  throw new Error('解压后没有找到 am/conf，模型包格式不对')
 }
 
 async function downloadZip(onProgress: (progress: VoskProgress) => void): Promise<void> {
@@ -84,19 +106,23 @@ async function packArchive(onProgress: (progress: VoskProgress) => void): Promis
   if (existsSync(extractTo)) rmSync(extractTo, { recursive: true, force: true })
   mkdirSync(extractTo, { recursive: true })
   await extract(zipPath(), { dir: extractTo })
-  const names = readdirSync(extractTo).filter((name) => name !== '__MACOSX')
-  const entries = names.includes(MODEL_DIR_NAME) ? [MODEL_DIR_NAME] : names
-  if (entries.length === 0) throw new Error('解压后没有找到语音模型文件')
+
+  const modelDir = findModelDir(extractTo)
+  const entries = readdirSync(modelDir).filter((name) => name !== '__MACOSX')
+  if (!entries.includes('am') || !entries.includes('conf')) {
+    throw new Error('模型目录缺少 am 或 conf')
+  }
 
   await tarCreate(
     {
       gzip: true,
       file: voskArchivePath(),
-      cwd: extractTo
+      cwd: modelDir
     },
     entries
   )
 
+  writeFileSync(markPath(), FORMAT_MARK, 'utf8')
   rmSync(zipPath(), { force: true })
   rmSync(extractTo, { recursive: true, force: true })
   onProgress({ phase: 'extract', received: 1, total: 1 })
@@ -104,7 +130,11 @@ async function packArchive(onProgress: (progress: VoskProgress) => void): Promis
 
 export async function ensureVoskModel(
   onProgress: (progress: VoskProgress) => void
-): Promise<string> {
+): Promise<Uint8Array> {
+  mkdirSync(modelRoot(), { recursive: true })
+  const stale = join(modelRoot(), `${MODEL_DIR_NAME}.tar.gz`)
+  if (existsSync(stale)) rmSync(stale, { force: true })
+
   if (!isVoskModelReady()) {
     await downloadZip(onProgress)
     await packArchive(onProgress)
@@ -112,5 +142,7 @@ export async function ensureVoskModel(
   if (!isVoskModelReady()) {
     throw new Error('语音模型安装失败，请检查网络后重试')
   }
-  return VOSK_MODEL_URL
+
+  const buf = await readFile(voskArchivePath())
+  return new Uint8Array(buf)
 }

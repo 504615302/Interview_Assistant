@@ -11,18 +11,6 @@ export function downsampleTo16k(input: Float32Array, sampleRate: number): Float3
   return output
 }
 
-export function to16kAudioBuffer(input: AudioBuffer): AudioBuffer {
-  const source = input.getChannelData(0)
-  const samples = downsampleTo16k(source, input.sampleRate)
-  const buffer = new AudioBuffer({
-    length: samples.length,
-    numberOfChannels: 1,
-    sampleRate: 16000
-  })
-  buffer.copyToChannel(samples, 0)
-  return buffer
-}
-
 type VoskResultMessage = {
   result: {
     text?: string
@@ -39,19 +27,50 @@ type VoskRecognizer = {
 
 type VoskModel = {
   KaldiRecognizer: new (sampleRate?: number) => VoskRecognizer
+  on(event: 'load' | 'error', listener: (message: { result?: boolean; error?: string }) => void): void
+  terminate(): void
 }
 
 let modelPromise: Promise<VoskModel> | null = null
+let blobUrl: string | null = null
 
-async function loadModel(modelUrl: string): Promise<VoskModel> {
-  const mod = (await import('vosk-browser')) as {
-    createModel: (url: string) => Promise<VoskModel>
+async function loadModel(archive: ArrayBuffer | Uint8Array): Promise<VoskModel> {
+  const vosk = (await import('vosk-browser')) as {
+    Model: new (modelUrl: string) => VoskModel
   }
-  try {
-    return await mod.createModel(modelUrl)
-  } catch {
-    throw new Error('本地语音模型加载失败，请重启应用重试')
-  }
+
+  if (blobUrl) URL.revokeObjectURL(blobUrl)
+  const bytes = archive instanceof Uint8Array ? archive : new Uint8Array(archive)
+  blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/gzip' }))
+  const modelUrl = blobUrl
+
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (error?: Error, model?: VoskModel): void => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      if (error) reject(error)
+      else if (model) resolve(model)
+    }
+
+    const timer = window.setTimeout(() => {
+      finish(new Error('语音模型加载超时，请重启应用'))
+    }, 120000)
+
+    try {
+      const model = new vosk.Model(modelUrl)
+      model.on('load', (message) => {
+        if (message.result) finish(undefined, model)
+        else finish(new Error('Vosk 无法解析模型文件'))
+      })
+      model.on('error', (message) => {
+        finish(new Error(message.error || 'Vosk worker 报错'))
+      })
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
 }
 
 export class LocalStt {
@@ -60,8 +79,8 @@ export class LocalStt {
   private finals: string[] = []
   private partial = ''
 
-  async prepare(modelUrl: string): Promise<void> {
-    if (!modelPromise) modelPromise = loadModel(modelUrl)
+  async prepare(archive: ArrayBuffer | Uint8Array): Promise<void> {
+    if (!modelPromise) modelPromise = loadModel(archive)
     this.model = await modelPromise
   }
 

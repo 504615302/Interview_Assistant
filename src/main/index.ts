@@ -1,35 +1,19 @@
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import {
   app,
   BrowserWindow,
   desktopCapturer,
   globalShortcut,
   ipcMain,
-  net,
-  protocol,
   session,
   shell
 } from 'electron'
 import { loadSettings, saveSettings } from './settings'
 import { streamAnswer, transcribeAudio } from './minimax'
-import { ensureVoskModel, voskArchivePath } from './vosk-model'
+import { ensureVoskModel } from './vosk-model'
 import type { AppSettings } from '../shared/types'
-
-protocol.registerSchemesAsPrivileged([
-  {
-    scheme: 'voskmodel',
-    privileges: {
-      standard: true,
-      secure: true,
-      supportFetchAPI: true,
-      corsEnabled: true,
-      stream: true,
-      bypassCSP: true
-    }
-  }
-])
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -166,7 +150,6 @@ function setupIpc(): void {
 }
 
 app.whenReady().then(() => {
-  protocol.handle('voskmodel', () => net.fetch(pathToFileURL(voskArchivePath()).href))
   setupIpc()
   setupDisplayMedia()
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
